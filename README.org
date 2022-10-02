@@ -1,0 +1,65 @@
+#+title: Webserver
+#+date: 2022-10-02
+#+author: Norman Tovey-Walsh
+#+startup: showeverything
+
+Webserver is a small Python script that wraps up the invocation of
+Docker to run a webserver in a container.
+
+* Installation
+:PROPERTIES:
+:CUSTOM_ID: h-AB8B815B-6F9A-4F6A-AFDA-B182E94D4ABB
+:END:
+
+To use this script, you must have [[https://www.docker.com/][Docker]] and [[https://www.python.org/][Python 3]] installed.
+
+Make sure you have all the prerequisites installed:
+
+#+BEGIN_SRC python
+python -m pip install -r requirements.txt
+#+END_SRC
+
+Then you can run ~bin/webserver~. You may wish to copy it to
+~/usr/local/bin~ or =~/bin= or somewhere on your path.
+
+The first time you run the script, Docker will download the Apache
+webserver container. That should only happen once. You’ll need an
+internet connection for that.
+
+* Usage
+:PROPERTIES:
+:CUSTOM_ID: h-C9657525-50BE-4542-BBDC-0A783AD8C770
+:END:
+
+If you just run =webserver=, it will attempt to start a new webserver
+on port 8125 serving the current working directory.
+
+If it succeeds, =http://localhost:8125/= will show you the current
+directory in a browser.
+
++ Use =--root PATH= to change the root directory of the web server to PATH.
++ Use =--port INT= to change the local port to INT.
++ Use =--start NAME= to change the server name to NAME. If you don’t
+  specify a name, Docker will generate a random name.
+
+If you don’t remembe what servers are running, =--list= will list them.
+
+You can stop a running server:
+
++ Use =--stop NAME= to stop the server named NAME.
++ Use =--stop-all= to stop all the webservers running. This will not stop any other containers.
+
+The default behavior of the script is to let the webserver run in the
+background. If, instead, you’d like to watch the log messages on the server, start it with =--foreground=.
+
+You can also look at the logs on any running server:
+
++ Use =--logs NAME= to see the logs on the server named NAME.
+
+If you combine =--logs NAME= and =--foreground=, you can watch the log
+messages on the named server.
+
+In foreground mode, you have to abort the script with Ctrl-C to get
+your terminal back. This *will not* stop the server. Use one of the
+stop options to do that.
+
