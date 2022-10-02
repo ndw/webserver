@@ -150,8 +150,6 @@ class DockerWebServer:
             }
         self.servers[container.id] = server
 
-        print(self.servers)
-                
         print(f"Started {name} on port {port} serving {root}")
         return server
 
