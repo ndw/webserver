@@ -37,6 +37,12 @@ on port 8125 serving the current working directory.
 If it succeeds, =http://localhost:8125/= will show you the current
 directory in a browser.
 
+If you don’t specify a port and there’s already a server on port 8125,
+it will try 8126, then 8127, etc. until it finds an open port. (Open
+port here means one that isn’t used by a webserver. If you have some
+other service running on the port selected, the attempt to start a
+container will fail.)
+
 + Use =--root PATH= to change the root directory of the web server to PATH.
 + Use =--port INT= to change the local port to INT.
 + Use =--start NAME= to change the server name to NAME. If you don’t
@@ -63,3 +69,4 @@ In foreground mode, you have to abort the script with Ctrl-C to get
 your terminal back. This *will not* stop the server. Use one of the
 stop options to do that.
 
+The =--version= option will show you the server version.
