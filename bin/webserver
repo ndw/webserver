@@ -4,10 +4,11 @@
 
 import os
 import sys
+import json
 import click
 import docker
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 DETAILS="https://github.com/ndw/webserver"
 
 class DockerWebServer:
@@ -18,22 +19,58 @@ class DockerWebServer:
     default_port = 8125
     default_root = "."
 
-    def __init__(self, show_list):
+    def __init__(self, show_list, config_file):
         """Create the class."""
         self.client = docker.from_env()
         self.apiclient = docker.APIClient(base_url='unix://var/run/docker.sock')
         self.servers = {}
+        self.reserved_ports = []
+
+        # Load the config file, if there is one
+        self.config = None
+        if config_file is None:
+            if "XDG_CONFIG_HOME" in os.environ:
+                home = os.environ["XDG_CONFIG_HOME"]
+            else:
+                home = os.path.join(os.path.expanduser("~"), ".config")
+            config_file = os.path.join(home, "nwalsh/webserver.json")
+        elif not (os.path.exists(config_file) and os.path.isfile(config_file)):
+            print(f"Ignoring unreadable configuration: {config_file}")
+            config_file = None
+            
+        if config_file and os.path.exists(config_file) and os.path.isfile(config_file):
+            with open(config_file, "r") as configf:
+                self.config = json.loads(configf.read())
+            if "default-port" in self.config:
+                DockerWebServer.default_port = int(self.config["default-port"])
+            if "container" in self.config:
+                container = self.config["container"]
+                if "name" in container:
+                    DockerWebServer.container_name = container["name"]
+                if "root" in container:
+                    DockerWebServer.container_root = container["root"]                    
+            if "default-port" in self.config:
+                DockerWebServer.default_port = int(self.config["default-port"])
+            if "servers" in self.config:
+                for server in self.config["servers"]:
+                    sconfig = self.config["servers"][server]
+                    if "root" in sconfig and "port" in sconfig:
+                        self.reserved_ports.append(int(sconfig["port"]))
+                    else:
+                        print(f"Server {server} is incorrectly configured")
 
         total_containers = 0
         server_containers = 0
         for container in self.client.containers.list():
             total_containers += 1
+
             for tag in container.image.tags:
                 if tag == DockerWebServer.container_name:
                     server_containers += 1
                     self.servers[container.id] = {
                         'name': container.name,
-                        'container': container
+                        'container': container,
+                        'id': container.id
                     }
                     details = self.apiclient.inspect_container(container.id)
                     # Find the binding for port 80
@@ -50,6 +87,14 @@ class DockerWebServer:
                         print(f"Serving {self.servers[container.id]['root']}" +
                               f" on port {self.servers[container.id]['port']}" +
                               f" with {container.name}")
+                else:
+                    details = self.apiclient.inspect_container(container.id)
+                    bindings = details["HostConfig"]["PortBindings"]
+                    for port in bindings:
+                        for bind in bindings[port]:
+                            if "HostPort" in bind:
+                                self.reserved_ports.append(int(bind["HostPort"]))
+
         if show_list:
             if total_containers == 0:
                 print("No containers are running")
@@ -80,6 +125,7 @@ class DockerWebServer:
         if server:
             print(f"Stopping {name} on port {server['port']}")
             server["container"].stop()
+            del self.servers[server["id"]]
             return True
 
         print(f"No web server named “{name}” is currently running")
@@ -97,7 +143,7 @@ class DockerWebServer:
 
         if not port:
             port = DockerWebServer.default_port
-            while self.find(None, port):
+            while self.find(None, port) or port in self.reserved_ports:
                 port += 1
 
         if not root:
@@ -113,23 +159,27 @@ class DockerWebServer:
                   file=sys.stderr)
             return None
 
-        if name:
-            container = self.client.containers.run(
-                DockerWebServer.container_name,
-                auto_remove=True,
-                tty=True,
-                ports={ '80/tcp': port },
-                volumes={ server_root: {'bind': DockerWebServer.container_root, 'mode': 'ro'} },
-                detach=True,
-                name=name)
-        else:
-            container = self.client.containers.run(
-                DockerWebServer.container_name,
-                auto_remove=True,
-                tty=True,
-                ports={ '80/tcp': port },
-                volumes={ server_root: {'bind': DockerWebServer.container_root, 'mode': 'ro'} },
-                detach=True)
+        try:
+            if name:
+                container = self.client.containers.run(
+                    DockerWebServer.container_name,
+                    auto_remove=True,
+                    tty=True,
+                    ports={ '80/tcp': port },
+                    volumes={ server_root: {'bind': DockerWebServer.container_root, 'mode': 'ro'} },
+                    detach=True,
+                    name=name)
+            else:
+                container = self.client.containers.run(
+                    DockerWebServer.container_name,
+                    auto_remove=True,
+                    tty=True,
+                    ports={ '80/tcp': port },
+                    volumes={ server_root: {'bind': DockerWebServer.container_root, 'mode': 'ro'} },
+                    detach=True)
+        except docker.errors.APIError as err:
+            print(f"Failed to create server: {err.explanation}")
+            return None
 
         name = container.name
         details = self.apiclient.inspect_container(container.id)
@@ -153,6 +203,23 @@ class DockerWebServer:
         print(f"Started {name} on port {port} serving {root}")
         return server
 
+def named_servers(servers, names):
+    """Start named servers."""
+
+    server = None
+    for name in names:
+        if not name in servers.config["servers"]:
+            print(f"No server named {name} defined")
+            server = None
+        else:
+            root = servers.config["servers"][name]["root"]
+            port = servers.config["servers"][name]["port"]
+            server = servers.find(name, port)
+            if server:
+                servers.stop(name)
+            server = servers.start(name, port, root)
+
+    return server
 
 @click.command()
 @click.option("--port", "-p", help="Server port", type=int)
@@ -163,18 +230,25 @@ class DockerWebServer:
 @click.option("--list", "list_", help="List running webserver containers", is_flag=True)
 @click.option("--logs", "-l", help="Show the logs for a container")
 @click.option("--foreground", "-f", help="Show the logs in the foreground", is_flag=True)
+@click.option("--config", "-c", help="Configuration file (default: ~/.webserver.json)")
 @click.option("--version", help="Show version information", is_flag=True)
+@click.argument("name", nargs=-1, required=False)
 # pylint: disable=R0913
-def webserver(port, root, start, stop, stop_all, list_, version, logs, foreground):
-    """Start a webserver in a Docker container."""
+def webserver(port, root, start, stop, stop_all, list_, version,
+              logs, foreground, config, name):
+    """Start a webserver in a Docker container.
+
+    If one or more NAME arguments is provided, webserver will
+    attempt to find those names in $HOME/.webserver.json
+    and start the server(s) described."""
 
     if version:
         print(f"Webserver version {VERSION}")
         print(f"See {DETAILS} or --help for more information")
         if not start and not stop and not stop_all and not list_:
             return
-    
-    servers = DockerWebServer(list_)
+
+    servers = DockerWebServer(list_, config)
 
     error = False
     if stop or stop_all:
@@ -183,12 +257,23 @@ def webserver(port, root, start, stop, stop_all, list_, version, logs, foregroun
         else:
             error = not servers.stop(stop)
 
-    if start or (not list_ and not logs and not stop and not stop_all):
+    if start or name:
+        if start:
+            server = servers.start(start, port, root)
+            error = error or not server
+        if name:
+            server = named_servers(servers, name)
+            error = error or not server
+    elif not list_ and not logs and not stop and not stop_all:
         server = servers.start(start, port, root)
-        error = not server
+        error = error or not server
 
     if error:
         sys.exit(1)
+
+    if ((start and name) or len(name) > 1) and foreground:
+        print("Ignoring --foreground; started multiple servers")
+        foreground = None
 
     if logs:
         server = servers.find(logs)
@@ -213,7 +298,7 @@ def webserver(port, root, start, stop, stop_all, list_, version, logs, foregroun
             pass
         except KeyboardInterrupt:
             pass
-        
+
 if __name__ == '__main__':
     # I know there aren't any values, click does that
     # pylint: disable=E1120

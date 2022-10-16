@@ -1,14 +1,14 @@
 #+title: Webserver
 #+date: 2022-10-02
 #+author: Norman Tovey-Walsh
-#+startup: showeverything
+#+startup: showall
 
 Webserver is a small Python script that wraps up the invocation of
 Docker to run a webserver in a container.
 
 * Installation
 :PROPERTIES:
-:CUSTOM_ID: h-AB8B815B-6F9A-4F6A-AFDA-B182E94D4ABB
+:CUSTOM_ID: installation
 :END:
 
 To use this script, you must have [[https://www.docker.com/][Docker]] and [[https://www.python.org/][Python 3]] installed.
@@ -28,11 +28,12 @@ internet connection for that.
 
 * Usage
 :PROPERTIES:
-:CUSTOM_ID: h-C9657525-50BE-4542-BBDC-0A783AD8C770
+:CUSTOM_ID: usage
 :END:
 
 If you just run =webserver=, it will attempt to start a new webserver
-on port 8125 serving the current working directory.
+on the default port (8125, unless you configure it differently)
+serving the current working directory.
 
 If it succeeds, =http://localhost:8125/= will show you the current
 directory in a browser.
@@ -56,7 +57,8 @@ You can stop a running server:
 + Use =--stop-all= to stop all the webservers running. This will not stop any other containers.
 
 The default behavior of the script is to let the webserver run in the
-background. If, instead, you’d like to watch the log messages on the server, start it with =--foreground=.
+background. If, instead, you’d like to watch the log messages on the
+server, start it with =--foreground=.
 
 You can also look at the logs on any running server:
 
@@ -70,3 +72,97 @@ your terminal back. This *will not* stop the server. Use one of the
 stop options to do that.
 
 The =--version= option will show you the server version.
+
+** Configuration
+:PROPERTIES:
+:CUSTOM_ID: configuration
+:END:
+
+After using the script for a couple of weeks, I decided it would be
+handy if some servers always started on the same port, thus a
+configuration file was born.
+
+The default configuration file is =nwalsh/webserver.json= in your
+[[https://specifications.freedesktop.org/basedir-spec/basedir-spec-latest.html][XDG configuration directory]],
+=$XDG_CONFIG_HOME=, or =$HOME/.config= if that environment
+variable isn’t set. (In other words, the default location is
+=$HOME/.config/nwalsh/webserver.json=.)
+You can load a different configuration file with
+=--config=.
+
+The configuration file is an object with three properties:
+
+- =default-port= :: The default server port (instead of 8125)
+- =servers= :: A collection of web servers
+- =container= :: An alternate container configuration
+
+All are optional. Any other properties are ignored, but there’s no
+guarantee I won’t add more in the future.
+
+*** Default port
+:PROPERTIES:
+:CUSTOM_ID: c-default-port
+:END:
+
+The =default-port= property specifies the default port.
+
+For example:
+
+#+BEGIN_SRC json
+{
+  "default-port": 8888
+}
+#+END_SRC
+
+*** Servers
+:PROPERTIES:
+:CUSTOM_ID: c-servers
+:END:
+
+The =servers= property is a nested map defining the properties of each
+named server.
+
+For example:
+
+#+BEGIN_SRC json
+{
+  "servers": {
+    "demo": {
+      "root": "/path/to/demo",
+      "port": 8130
+    }
+}
+#+END_SRC
+
+This configuration defines a server named =demo= that will serve up the local directory
+=/path/to/demo= on port 8130. You can have as many servers as you like. Each server
+/must/ specify a =root= and a =port=.
+
+*** Container
+:PROPERTIES:
+:CUSTOM_ID: c-container
+:END:
+
+By default, =webserver= starts an Apache 2.4 server in a container. If you want to start a different
+container, configure it with =container=.
+
+For example:
+
+#+BEGIN_SRC json
+{
+  "container": {
+    "name": "nginx:mainline",
+    "root": "/usr/share/nginx/html"
+  }
+}
+#+END_SRC
+
+This configuration will start the Nginx mainline server instead of
+Apache. The =root= property identifies the location /inside the
+container/ where the server root directory should be mounted.
+
+For what it’s worth, Nginx doesn’t have directory listings enabled by
+default, so it’s somewhat harder to use in an ad hoc manner.
+
+Obviously, =container= could be generalized into a nested map like
+=servers= and it could support ports other than port 80. But not today.
