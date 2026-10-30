@@ -1,15 +1,38 @@
 #!/usr/bin/env python3
 
-"""Start an Apache webserver running in a Docker container."""
+"""Start a webserver. This can be an Apache web server in a Docker
+container or a local nginx configuration."""
 
 import os
+import re
 import sys
 import json
 import click
 import docker
+import glob
+import subprocess
 
-VERSION="1.1.0"
+VERSION="2.0.0"
 DETAILS="https://github.com/ndw/webserver"
+
+def readConfiguration(config_file):
+    # Load the config file, if there is one
+    config = None
+    if config_file is None:
+        if "XDG_CONFIG_HOME" in os.environ:
+            home = os.environ["XDG_CONFIG_HOME"]
+        else:
+            home = os.path.join(os.path.expanduser("~"), ".config")
+        config_file = os.path.join(home, "nwalsh/webserver.json")
+    elif not (os.path.exists(config_file) and os.path.isfile(config_file)):
+        print(f"Ignoring unreadable configuration: {config_file}")
+        config_file = None
+        
+    if config_file and os.path.exists(config_file) and os.path.isfile(config_file):
+        with open(config_file, "r") as configf:
+            config = json.loads(configf.read())
+
+    return config
 
 class DockerWebServer:
     """Interact with Docker containers running the Apache webserver."""
@@ -25,39 +48,23 @@ class DockerWebServer:
         self.apiclient = docker.APIClient(base_url='unix://var/run/docker.sock')
         self.servers = {}
         self.reserved_ports = []
+        self.config = readConfiguration(config_file)
 
-        # Load the config file, if there is one
-        self.config = None
-        if config_file is None:
-            if "XDG_CONFIG_HOME" in os.environ:
-                home = os.environ["XDG_CONFIG_HOME"]
-            else:
-                home = os.path.join(os.path.expanduser("~"), ".config")
-            config_file = os.path.join(home, "nwalsh/webserver.json")
-        elif not (os.path.exists(config_file) and os.path.isfile(config_file)):
-            print(f"Ignoring unreadable configuration: {config_file}")
-            config_file = None
-            
-        if config_file and os.path.exists(config_file) and os.path.isfile(config_file):
-            with open(config_file, "r") as configf:
-                self.config = json.loads(configf.read())
-            if "default-port" in self.config:
-                DockerWebServer.default_port = int(self.config["default-port"])
-            if "container" in self.config:
-                container = self.config["container"]
-                if "name" in container:
-                    DockerWebServer.container_name = container["name"]
-                if "root" in container:
-                    DockerWebServer.container_root = container["root"]                    
-            if "default-port" in self.config:
-                DockerWebServer.default_port = int(self.config["default-port"])
-            if "servers" in self.config:
-                for server in self.config["servers"]:
-                    sconfig = self.config["servers"][server]
-                    if "root" in sconfig and "port" in sconfig:
-                        self.reserved_ports.append(int(sconfig["port"]))
-                    else:
-                        print(f"Server {server} is incorrectly configured")
+        if "default-port" in self.config:
+            DockerWebServer.default_port = int(self.config["default-port"])
+        if "container" in self.config:
+            container = self.config["container"]
+            if "name" in container:
+                DockerWebServer.container_name = container["name"]
+            if "root" in container:
+                DockerWebServer.container_root = container["root"]                    
+        if "servers" in self.config:
+            for server in self.config["servers"]:
+                sconfig = self.config["servers"][server]
+                if "root" in sconfig and "port" in sconfig:
+                    self.reserved_ports.append(int(sconfig["port"]))
+                else:
+                    print(f"Server {server} is incorrectly configured")
 
         total_containers = 0
         server_containers = 0
@@ -131,7 +138,6 @@ class DockerWebServer:
         print(f"No web server named “{name}” is currently running")
         return False
 
-
     def start(self, name, port, root):
         """Start a webserver.
 
@@ -203,6 +209,190 @@ class DockerWebServer:
         print(f"Started {name} on port {port} serving {root}")
         return server
 
+
+class NginxWebServer:
+    """Interact with nginx running locally."""
+
+    config_restart = "nginx -s reload"
+    config_directory = "/etc/nginx/servers"
+    config_prefix = "web-"
+    default_port = 8125
+
+    def __init__(self, show_list, config_file):
+        """Create the class."""
+        self.servers = {}
+        self.reserved_ports = []
+        self.config = readConfiguration(config_file)
+        self.nginx_config = NginxWebServer.config_directory
+        self.default_port = NginxWebServer.default_port
+        self.restart = NginxWebServer.config_restart
+
+        if "default-port" in self.config:
+            self.default_port = int(self.config["default-port"])
+        if "nginx-config" in self.config:
+            self.nginx_config = self.config["nginx-config"]
+        if "nginx-restart" in self.config:
+            self.restart = self.config["nginx-restart"]
+
+        if "servers" in self.config:
+            for server in self.config["servers"]:
+                sconfig = self.config["servers"][server]
+                if "root" in sconfig and "port" in sconfig:
+                    self.reserved_ports.append(int(sconfig["port"]))
+                else:
+                    print(f"Server {server} is incorrectly configured")
+
+        if not os.path.exists(self.nginx_config) or not os.path.isdir(self.nginx_config):
+            print(f"Nginx configuration incorrect: {self.nginx_config}")
+            return
+
+        total_containers = 0
+        server_containers = 0
+        for container in glob.glob(f"{self.nginx_config}/*.conf"):
+            total_containers += 1
+            cfg = os.path.basename(container)
+            if cfg.startswith(NginxWebServer.config_prefix):
+                server_containers += 1
+                self.servers[cfg] = {'name': cfg}
+                with open(container, "r") as conf:
+                    for line in conf.readlines():
+                        line = line.strip()
+                        match = re.match(r"^\s*root\s+([^;]+)\s*;?\s*$", line)
+                        if match:
+                            self.servers[cfg]['root'] = match.group(1)
+                        match = re.match(r"^\s*listen\s+(\d+)\s*;?\s*$", line)
+                        if match:
+                            self.servers[cfg]['port'] = int(match.group(1))
+
+                    if show_list:
+                        print(f"Serving {self.servers[cfg]['root']}" +
+                              f" on port {self.servers[cfg]['port']}")
+
+        if show_list:
+            if total_containers == 0:
+                print("No configurations are running")
+            else:
+                print(f"Web servers are {server_containers} of {total_containers} configurations")
+
+    def restart_nginx(self):
+        exec = self.restart.split(" ")
+        subprocess.run(exec)
+
+    def find(self, name, port=None):
+        """Find a server by name or port."""
+        for server in self.servers.values():
+            if name == server['name']:
+                return server
+        if port:
+            for server in self.servers.values():
+                if port == server['port']:
+                    return server
+        return None
+
+    def stop_all(self):
+        """Stop all the running webservers."""
+        for cfg, server in self.servers.items():
+            print(f"Stopping nginx server on port {server['port']}")
+            os.remove(f"{self.nginx_config}/{cfg}")
+        self.servers = {}
+        self.restart_nginx()
+
+    def stop(self, name):
+        """Stop a particular webserver by name."""
+        server = self.find(name)
+        if server:
+            print(f"Stopping {name} on port {server['port']}")
+            os.remove(f"{self.nginx_config}/{server['name']}")
+            del self.servers[server['name']]
+            self.restart_nginx()
+            return True
+
+        print(f"No web server named “{name}” is currently running")
+        return False
+
+    def start(self, name, port, root):
+        """Start a webserver.
+
+        Name is ignored. It's always generated by this method.
+        If no port is specified, the default port (or the next apparently
+        available port above the default port) will be used. If no root
+        is specified, the current working directory will be used.
+        """
+
+        if not port:
+            port = self.default_port
+            while self.find(None, port) or port in self.reserved_ports:
+                port += 1
+
+        name = f"web-{port}.conf"
+
+        if not root:
+            root = os.getcwd()
+
+        server_root = os.path.abspath(root)
+
+        server = self.find(name, port)
+        if server:
+            name = server['name']
+            port = server['port']
+            print(f"There is already a server named {name} on port {port}",
+                  file=sys.stderr)
+            return None
+
+        with open(f"{self.nginx_config}/{name}", "w") as conf:
+            conf.write("server {\n")
+            conf.write(f"\taccess_log /tmp/web-access-{port}.log;\n")
+            conf.write(f"\terror_log /tmp/web-error-{port}.log;\n")
+            conf.write(f"\troot {server_root};\n")
+            conf.write("\tindex index.html;\n")
+            conf.write(f"\tlisten {port};\n")
+            conf.write(f"\tserver_name {name};\n")
+            conf.write("location / {\n")
+            conf.write("  autoindex on;\n")
+            conf.write("}\n")
+            conf.write("}\n")
+
+        self.restart_nginx()
+
+        server = {
+            'name': name,
+            'port': port,
+            'root': root
+            }
+        self.servers[name] = server
+
+        print(f"Started {name} on port {port} serving {root}")
+        return server
+
+    def update_html(self):
+        index = self.config["html-index"]
+        if not index:
+            return
+
+        servers = {}
+        for container in glob.glob(f"{self.nginx_config}/*.conf"):
+            cfg = os.path.basename(container)
+            if cfg.startswith(NginxWebServer.config_prefix):
+                server = {'name': cfg}
+                with open(container, "r") as conf:
+                    for line in conf.readlines():
+                        line = line.strip()
+                        match = re.match(r"^\s*root\s+([^;]+)\s*;?\s*$", line)
+                        if match:
+                            server['root'] = match.group(1)
+                        match = re.match(r"^\s*listen\s+(\d+)\s*;?\s*$", line)
+                        if match:
+                            server['port'] = int(match.group(1))
+                servers[server["port"]] = server["root"]
+
+        html = "<ul class='webservers'>\n"
+        for port in sorted(servers.keys()):
+            html += f"<li><a target='_blank' rel='noopener noreferrer' href='http://localhost:{port}/'>{port}</a> <code>{servers[port]}</code></li>\n"
+        html += "</ul>\n"
+
+        with open(self.config["html-index"], "w") as index:
+            index.write(html)
+
 def named_servers(servers, names):
     """Start named servers."""
 
@@ -231,11 +421,12 @@ def named_servers(servers, names):
 @click.option("--logs", "-l", help="Show the logs for a container")
 @click.option("--foreground", "-f", help="Show the logs in the foreground", is_flag=True)
 @click.option("--config", "-c", help="Configuration file (default: ~/.webserver.json)")
+@click.option("--backend", help="Use the Docker or nginx backend", default="nginx")
 @click.option("--version", help="Show version information", is_flag=True)
 @click.argument("name", nargs=-1, required=False)
 # pylint: disable=R0913
 def webserver(port, root, start, stop, stop_all, list_, version,
-              logs, foreground, config, name):
+              logs, foreground, config, name, backend):
     """Start a webserver in a Docker container.
 
     If one or more NAME arguments is provided, webserver will
@@ -248,7 +439,10 @@ def webserver(port, root, start, stop, stop_all, list_, version,
         if not start and not stop and not stop_all and not list_:
             return
 
-    servers = DockerWebServer(list_, config)
+    if backend == "nginx":
+        servers = NginxWebServer(list_, config)
+    else:
+        servers = DockerWebServer(list_, config)
 
     error = False
     if stop or stop_all:
@@ -267,6 +461,8 @@ def webserver(port, root, start, stop, stop_all, list_, version,
     elif not list_ and not logs and not stop and not stop_all:
         server = servers.start(start, port, root)
         error = error or not server
+
+    servers.update_html()
 
     if error:
         sys.exit(1)

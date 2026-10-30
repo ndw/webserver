@@ -6,9 +6,14 @@
 Webserver is a small Python script that wraps up the invocation of
 Docker to run a webserver in a container.
 
+Apparently, I extended this script to work with local nginx configurations
+back in December, 2025, and never pushed that commit. Or updated
+the docs. Or anything else.
+
 * Installation
 :PROPERTIES:
 :CUSTOM_ID: installation
+:ID:       37317517-5E54-4012-9BD2-BE9DD58AF95E
 :END:
 
 To use this script, you must have [[https://www.docker.com/][Docker]] and [[https://www.python.org/][Python 3]] installed.
@@ -29,6 +34,7 @@ internet connection for that.
 * Usage
 :PROPERTIES:
 :CUSTOM_ID: usage
+:ID:       AD4CE7D2-96B9-4429-A2EF-5218F562B4E4
 :END:
 
 If you just run =webserver=, it will attempt to start a new webserver
@@ -76,6 +82,7 @@ The =--version= option will show you the server version.
 ** Configuration
 :PROPERTIES:
 :CUSTOM_ID: configuration
+:ID:       DCF482B0-5B47-4BD2-9EE9-761F4FF6D901
 :END:
 
 After using the script for a couple of weeks, I decided it would be
@@ -102,6 +109,7 @@ guarantee I won’t add more in the future.
 *** Default port
 :PROPERTIES:
 :CUSTOM_ID: c-default-port
+:ID:       FAE7FFC7-B587-4D33-AE66-35FD3D4AF0FF
 :END:
 
 The =default-port= property specifies the default port.
@@ -117,6 +125,7 @@ For example:
 *** Servers
 :PROPERTIES:
 :CUSTOM_ID: c-servers
+:ID:       8DC1E208-3B82-43AF-BE2E-DEC1EFED2668
 :END:
 
 The =servers= property is a nested map defining the properties of each
@@ -141,6 +150,7 @@ This configuration defines a server named =demo= that will serve up the local di
 *** Container
 :PROPERTIES:
 :CUSTOM_ID: c-container
+:ID:       6770A19F-E087-4406-9E8C-C6BDB326FA3B
 :END:
 
 By default, =webserver= starts an Apache 2.4 server in a container. If you want to start a different
